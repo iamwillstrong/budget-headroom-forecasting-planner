@@ -71,6 +71,10 @@ def create_forecast_and_outputs(_df, spend_column, conversions_column, percentag
         ax1.plot(current_avg_spend, current_avg_conv, 'o', color='darkorange', markersize=10, zorder=5, label='Current Average Position')
         ax1.plot(potential_spend, potential_conv, '*', color='seagreen', markersize=15, zorder=5, label=f'Forecast at +{percentage_increase}% Spend')
         
+        # Add dotted lines for the forecast point
+        ax1.vlines(x=potential_spend, ymin=0, ymax=potential_conv, color='seagreen', linestyle='--', alpha=0.7)
+        ax1.hlines(y=potential_conv, xmin=0, xmax=potential_spend, color='seagreen', linestyle='--', alpha=0.7)
+
         ax1.set_xlabel(f'Daily Spend ({spend_column})', fontsize=12)
         ax1.set_ylabel('Predicted Daily Conversions', fontsize=12, color='royalblue')
         ax1.tick_params(axis='y', labelcolor='royalblue')
@@ -98,10 +102,13 @@ def create_forecast_and_outputs(_df, spend_column, conversions_column, percentag
         image_bytes = buf.getvalue()
         
         summary_results = {
+            "current_spend": current_avg_spend,
+            "potential_spend": potential_spend,
             "current_conv": current_avg_conv,
             "potential_conv": potential_conv,
             "current_cpa": current_cpa,
-            "potential_cpa": potential_cpa
+            "potential_cpa": potential_cpa,
+            "percentage_increase": percentage_increase
         }
         
         return fig, image_bytes, summary_results
@@ -173,5 +180,19 @@ if uploaded_file is not None:
                                     file_name=f'forecast_{advertiser_id_input}_{selected_objective}.png',
                                     mime='image/png'
                                 )
+
+                                # Analysis Bullet Points
+                                st.markdown("---")
+                                st.subheader("Analysis")
+                                st.markdown(
+                                    f" • **Current State**: The campaigns are currently averaging **${summary_res['current_spend']:,.2f}** in daily spend, "
+                                    f"resulting in approximately **{summary_res['current_conv']:.0f}** conversions at a CPA of **${summary_res['current_cpa']:.2f}**."
+                                )
+                                st.markdown(
+                                    f" • **Growth Opportunity**: Increasing the daily budget by **{summary_res['percentage_increase']}%** to **${summary_res['potential_spend']:,.2f}** "
+                                    f"is forecasted to yield approximately **{summary_res['potential_conv']:.0f}** conversions. The model predicts this increase would be cost-effective, "
+                                    f"with an expected CPA of **${summary_res['potential_cpa']:.2f}**."
+                                )
+
     except Exception as e:
         st.error(f"An error occurred while processing the file: {e}")
