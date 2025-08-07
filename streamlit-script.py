@@ -129,10 +129,10 @@ def create_forecast_and_outputs(_df, spend_column, conversions_column, objective
 
 # --- Streamlit App UI ---
 
-st.title('Campaign Spend vs. Conversion Forecaster')
+st.title('Campaign Forecast Planner 🎯')
 
 # 1. CSV File Upload
-uploaded_file = st.file_uploader("Upload your campaign performance CSV", type="csv")
+uploaded_file = st.file_uploader("Upload your account performance CSV", type="csv")
 
 if uploaded_file is not None:
     try:
@@ -142,7 +142,7 @@ if uploaded_file is not None:
         objective_column = 'Objective Type'
         if objective_column in data.columns:
             objectives = data[objective_column].dropna().unique().tolist()
-            selected_objective = st.selectbox("Choose an Objective to Analyze", options=objectives)
+            selected_objective = st.selectbox("Choose an objective to analyze", options=objectives)
 
             # 3. Run Analysis Button
             if st.button("Generate Forecast"):
