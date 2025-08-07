@@ -12,35 +12,22 @@ import io
 # Streamlit's cache decorator prevents re-running this heavy computation on every interaction.
 
 @st.cache_data
-def create_forecast_and_outputs(_df, spend_column, conversions_column, objective_column, objective_type):
+def create_forecast_and_outputs(_df, spend_column, conversions_column):
     """
     Runs the Bayesian model, creates the plot, and generates the summary text.
 
     Args:
-        _df (pd.DataFrame): The input DataFrame.
+        _df (pd.DataFrame): The filtered and cleaned input DataFrame.
         spend_column (str): The name of the spend column.
         conversions_column (str): The name of the conversions column.
-        objective_column (str): The name of the objective column.
-        objective_type (str): The selected objective to analyze.
 
     Returns:
         tuple: A tuple containing the Matplotlib figure, the PNG image as bytes, 
                and the formatted summary string. Returns (None, None, "") on error.
     """
     try:
-        # Filter and clean data for the selected objective
-        filtered_data = _df[_df[objective_column] == objective_type].copy()
-        filtered_data[spend_column] = pd.to_numeric(filtered_data[spend_column], errors='coerce')
-        filtered_data[conversions_column] = pd.to_numeric(filtered_data[conversions_column], errors='coerce')
-        clean_data = filtered_data[[spend_column, conversions_column]].dropna()
-        clean_data = clean_data[clean_data[spend_column] > 0]
-
-        if clean_data.empty:
-            st.error(f"Error: No valid data for objective '{objective_type}' after cleaning. Please check your CSV.")
-            return None, None, ""
-
-        spend_obs = clean_data[spend_column].values
-        conversions_obs = clean_data[conversions_column].values
+        spend_obs = _df[spend_column].values
+        conversions_obs = _df[conversions_column].values
 
         # Run Bayesian model
         with pm.Model() as model:
@@ -98,7 +85,7 @@ def create_forecast_and_outputs(_df, spend_column, conversions_column, objective
         ax2.tick_params(axis='y', labelcolor='seagreen')
         ax2.set_ylim(0, modeled_cpa[~np.isinf(modeled_cpa)].max() * 1.2)
 
-        ax1.set_title(f'Spend vs. Conversions Forecast for "{objective_type}" Campaigns', fontsize=16, fontweight='bold')
+        ax1.set_title(f'Spend vs. Conversions Forecast', fontsize=16, fontweight='bold')
         fig.tight_layout()
         
         lines1, labels1 = ax1.get_legend_handles_labels()
@@ -129,49 +116,70 @@ def create_forecast_and_outputs(_df, spend_column, conversions_column, objective
 
 # --- Streamlit App UI ---
 
-st.title('Campaign Forecast Planner 🎯')
+st.title('Campaign Spend vs. Conversion Forecaster')
 
 # 1. CSV File Upload
-uploaded_file = st.file_uploader("Upload your account performance CSV", type="csv")
+uploaded_file = st.file_uploader("Upload your campaign performance CSV", type="csv")
 
 if uploaded_file is not None:
     try:
         data = pd.read_csv(uploaded_file)
         
-        # 2. Objective Selection
+        # Define column names
+        advertiser_id_column = 'Advertiser ID'
         objective_column = 'Objective Type'
-        if objective_column in data.columns:
-            objectives = data[objective_column].dropna().unique().tolist()
-            selected_objective = st.selectbox("Choose an objective to analyze", options=objectives)
+        spend_column = 'Cost (USD)'
+        conversions_column = 'Conversions'
 
-            # 3. Run Analysis Button
-            if st.button("Generate Forecast"):
-                with st.spinner('Running Bayesian model... This may take a few minutes.'):
-                    # Call the main function to get the outputs
-                    fig, image_bytes, summary = create_forecast_and_outputs(
-                        _df=data,
-                        spend_column='Cost (USD)',
-                        conversions_column='Conversions',
-                        objective_column=objective_column,
-                        objective_type=selected_objective
-                    )
-
-                # 4. Display Outputs
-                if fig:
-                    st.pyplot(fig)
-                    
-                    st.download_button(
-                        label="Download Graph as PNG",
-                        data=image_bytes,
-                        file_name=f'forecast_{selected_objective}.png',
-                        mime='image/png'
-                    )
-
-                    st.markdown("---")
-                    st.subheader("Analysis Summary")
-                    st.markdown(summary)
+        # Check if required columns exist
+        if advertiser_id_column not in data.columns or objective_column not in data.columns:
+            st.error(f"Error: CSV must contain '{advertiser_id_column}' and '{objective_column}' columns.")
         else:
-            st.error(f"Error: The required column '{objective_column}' was not found in the uploaded file.")
+            # 2. Advertiser ID Input
+            advertiser_id_input = st.text_input("Enter Advertiser ID to analyze")
+
+            if advertiser_id_input:
+                # Convert advertiser ID column to string for reliable matching
+                data[advertiser_id_column] = data[advertiser_id_column].astype(str)
+                advertiser_data = data[data[advertiser_id_column] == advertiser_id_input]
+
+                if advertiser_data.empty:
+                    st.warning("No data found for the specified Advertiser ID. Please check the ID and try again.")
+                else:
+                    # 3. Objective Selection from filtered data
+                    objectives = advertiser_data[objective_column].dropna().unique().tolist()
+                    if not objectives:
+                        st.warning("No objectives found for this Advertiser ID.")
+                    else:
+                        selected_objective = st.selectbox("Choose an Objective to Analyze", options=objectives)
+
+                        # 4. Run Analysis Button
+                        if st.button("Generate Forecast"):
+                            # Filter data for the final analysis
+                            analysis_df = advertiser_data[advertiser_data[objective_column] == selected_objective]
+                            
+                            with st.spinner('Running Bayesian model... This may take a few minutes.'):
+                                # Call the main function to get the outputs
+                                fig, image_bytes, summary = create_forecast_and_outputs(
+                                    _df=analysis_df,
+                                    spend_column=spend_column,
+                                    conversions_column=conversions_column
+                                )
+
+                            # 5. Display Outputs
+                            if fig:
+                                st.pyplot(fig)
+                                
+                                st.download_button(
+                                    label="Download Graph as PNG",
+                                    data=image_bytes,
+                                    file_name=f'forecast_{advertiser_id_input}_{selected_objective}.png',
+                                    mime='image/png'
+                                )
+
+                                st.markdown("---")
+                                st.subheader("Analysis Summary")
+                                st.markdown(summary)
 
     except Exception as e:
         st.error(f"An error occurred while processing the file: {e}")
