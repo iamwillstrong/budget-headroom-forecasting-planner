@@ -184,15 +184,20 @@ if uploaded_file is not None:
                                 # Analysis Bullet Points
                                 st.markdown("---")
                                 st.subheader("Analysis")
-                                st.markdown(
+                                
+                                # Combined f-strings for clean formatting
+                                summary_bullet_1 = (
                                     f" • **Current State**: The campaigns are currently averaging **${summary_res['current_spend']:,.2f}** in daily spend, "
                                     f"resulting in approximately **{summary_res['current_conv']:.0f}** conversions at a CPA of **${summary_res['current_cpa']:.2f}**."
                                 )
-                                st.markdown(
+                                st.markdown(summary_bullet_1)
+
+                                summary_bullet_2 = (
                                     f" • **Growth Opportunity**: Increasing the daily budget by **{summary_res['percentage_increase']}%** to **${summary_res['potential_spend']:,.2f}** "
                                     f"is forecasted to yield approximately **{summary_res['potential_conv']:.0f}** conversions. The model predicts this increase would be cost-effective, "
                                     f"with an expected CPA of **${summary_res['potential_cpa']:.2f}**."
                                 )
+                                st.markdown(summary_bullet_2)
 
     except Exception as e:
         st.error(f"An error occurred while processing the file: {e}")
