@@ -30,31 +30,53 @@ def create_forecast_and_outputs(_df, spend_column, conversions_column, percentag
         spend_obs = _df[spend_column].values
         conversions_obs = _df[conversions_column].values
 
-        # Run Bayesian model
+        # --- Data Normalization ---
+        # Normalize spend data to a 0-1 scale for model stability.
+        spend_max = spend_obs.max()
+        spend_normalized = spend_obs / spend_max
+
+        # --- Bayesian Sigmoid Growth Model ---
         with pm.Model() as model:
-            L = pm.Normal("L", mu=conversions_obs.max() * 1.5, sigma=conversions_obs.max() * 0.5)
-            k = pm.HalfNormal("k", sigma=1)
-            x0 = pm.Normal("x0", mu=np.median(spend_obs), sigma=np.std(spend_obs) * 2)
+            # Priors for the sigmoid function parameters: f(x) = L * sigmoid(k * (x - x0))
+            # L (Limit/Capacity): Must be positive. Using HalfNormal.
+            L = pm.HalfNormal("L", sigma=conversions_obs.max() * 2)
+            
+            # k (Steepness): On the normalized scale, a sigma of 5 is a reasonable prior.
+            k = pm.HalfNormal("k", sigma=5)
+            
+            # x0 (Midpoint): On the normalized scale, the midpoint should be between 0 and 1.
+            x0 = pm.Normal("x0", mu=0.5, sigma=0.2)
+            
+            # Sigma: The noise or variability of the data around the curve.
             sigma = pm.HalfNormal("sigma", sigma=np.std(conversions_obs))
-            mu = L * pm.math.sigmoid(k * (spend_obs - x0))
+
+            # Expected conversions based on the sigmoid function using pm.math.sigmoid
+            mu = L * pm.math.sigmoid(k * (spend_normalized - x0))
+
+            # Likelihood of the observed data
             y_obs = pm.Normal("y_obs", mu=mu, sigma=sigma, observed=conversions_obs)
+
+            # Sample from the posterior distribution
             trace = pm.sample(2000, tune=1000, chains=4, target_accept=0.95, cores=1)
 
-        # Process results
+        # --- Generate Forecast and Analyze Results (on De-normalized Scale) ---
         current_avg_spend = spend_obs.mean()
         potential_spend = current_avg_spend * (1 + percentage_increase / 100)
         
         budget_range = np.linspace(1, max(spend_obs.max(), potential_spend) * 1.2, 200)
+        budget_range_normalized = budget_range / spend_max
+
         post = az.extract(trace, var_names=["L", "k", "x0", "sigma"])
-        mu_curves = post["L"].values[:, np.newaxis] * expit(post["k"].values[:, np.newaxis] * (budget_range - post["x0"].values[:, np.newaxis]))
+        mu_curves = post["L"].values[:, np.newaxis] * expit(post["k"].values[:, np.newaxis] * (budget_range_normalized - post["x0"].values[:, np.newaxis]))
         mean_predictions = mu_curves.mean(axis=0)
         modeled_cpa = budget_range / mean_predictions
         
         def predict_conversions(spend_value, trace):
+            spend_val_normalized = spend_value / spend_max
             L_samples = trace.posterior['L'].values.flatten()
             k_samples = trace.posterior['k'].values.flatten()
             x0_samples = trace.posterior['x0'].values.flatten()
-            return (L_samples * expit(k_samples * (spend_value - x0_samples))).mean()
+            return (L_samples * expit(k_samples * (spend_val_normalized - x0_samples))).mean()
 
         current_avg_conv = predict_conversions(current_avg_spend, trace)
         potential_conv = predict_conversions(potential_spend, trace)
@@ -119,7 +141,7 @@ def create_forecast_and_outputs(_df, spend_column, conversions_column, percentag
 
 # --- Streamlit App UI ---
 
-st.title('Campaign Spend vs. Conversion Forecaster')
+st.title('💸 Campaign Spend Forecaster 💸')
 
 uploaded_file = st.file_uploader("Upload your campaign performance CSV", type="csv")
 
@@ -151,13 +173,13 @@ if uploaded_file is not None:
                         selected_objective = st.selectbox("Choose an Objective to Analyze", options=objectives)
                         
                         # 4. Percentage Increase Input
-                        percentage_increase = st.number_input("Enter Percentage Increase (%)", min_value=0, max_value=200, value=20, step=5)
+                        percentage_increase = st.number_input("Enter Percentage Budget Increase (%)", min_value=0, max_value=200, value=20, step=5)
 
                         # 5. Run Analysis Button
                         if st.button("Generate Forecast"):
                             analysis_df = advertiser_data[advertiser_data[objective_column] == selected_objective]
                             
-                            with st.spinner('Running Bayesian model... This may take a few minutes.'):
+                            with st.spinner('Running forecasting model... This may take a few minutes.'):
                                 fig, image_bytes, summary_res = create_forecast_and_outputs(
                                     _df=analysis_df,
                                     spend_column=spend_column,
