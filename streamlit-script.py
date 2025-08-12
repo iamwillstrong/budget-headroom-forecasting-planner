@@ -38,8 +38,9 @@ def create_forecast_and_outputs(_df, spend_column, conversions_column, percentag
         # --- Bayesian Sigmoid Growth Model ---
         with pm.Model() as model:
             # Priors for the sigmoid function parameters: f(x) = L * sigmoid(k * (x - x0))
-            # L (Limit/Capacity): Must be positive. Using HalfNormal.
-            L = pm.HalfNormal("L", sigma=conversions_obs.max() * 2)
+            # L (Limit/Capacity): Using a TruncatedNormal to ensure the value is strictly positive
+            # and logically starts above the highest observed conversion count.
+            L = pm.TruncatedNormal("L", mu=conversions_obs.max() * 1.5, sigma=conversions_obs.max() * 0.5, lower=conversions_obs.max())
             
             # k (Steepness): On the normalized scale, a sigma of 5 is a reasonable prior.
             k = pm.HalfNormal("k", sigma=5)
@@ -56,8 +57,8 @@ def create_forecast_and_outputs(_df, spend_column, conversions_column, percentag
             # Likelihood of the observed data
             y_obs = pm.Normal("y_obs", mu=mu, sigma=sigma, observed=conversions_obs)
 
-            # Sample from the posterior distribution
-            trace = pm.sample(2000, tune=1000, chains=4, target_accept=0.95, cores=1)
+            # Sample from the posterior distribution using a robust initialization method
+            trace = pm.sample(2000, tune=1000, chains=4, target_accept=0.95, cores=1, init='advi+adapt_diag')
 
         # --- Generate Forecast and Analyze Results (on De-normalized Scale) ---
         current_avg_spend = spend_obs.mean()
