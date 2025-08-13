@@ -152,7 +152,7 @@ if uploaded_file is not None:
         
         # Define column names
         advertiser_id_column = 'Advertiser ID'
-        account_name_column = 'Account Name'
+        account_name_column = 'Advertiser Name' # Corrected from 'Account Name'
         objective_column = 'Objective Type'
         spend_column = 'Cost (USD)'
         conversions_column = 'Conversions'
