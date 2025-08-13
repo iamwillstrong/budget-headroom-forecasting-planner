@@ -152,7 +152,7 @@ if uploaded_file is not None:
         
         # Define column names
         advertiser_id_column = 'Advertiser ID'
-        account_name_column = 'Advertiser Name' # Corrected from 'Account Name'
+        account_name_column = 'Advertiser Name'
         objective_column = 'Objective Type'
         spend_column = 'Cost (USD)'
         conversions_column = 'Conversions'
@@ -162,85 +162,81 @@ if uploaded_file is not None:
         if not all(col in data.columns for col in required_cols):
             st.error(f"Error: CSV must contain all required columns: {required_cols}")
         else:
-            # 2. Account Name Selection
-            account_names = data[account_name_column].dropna().unique().tolist()
-            selected_account_name = st.selectbox("Choose an Account to Analyze", options=account_names)
+            # Get the single advertiser name from the file
+            advertiser_name = data[account_name_column].iloc[0]
 
-            if selected_account_name:
-                advertiser_data = data[data[account_name_column] == selected_account_name]
+            # 3. Objective Selection from filtered data
+            # Define objectives to exclude
+            excluded_objectives = ['Reach', 'Video Views', 'Reach & Frequency', 'TopView', 'Top Feed', 'TikTok Pulse']
+            
+            # Filter for objectives with conversions > 0
+            objective_conversions = data.groupby(objective_column)[conversions_column].sum()
+            valid_objectives = objective_conversions[objective_conversions > 0].index.tolist()
+            
+            # Filter out the excluded objectives
+            final_objectives = [obj for obj in valid_objectives if obj not in excluded_objectives]
+            
+            if not final_objectives:
+                st.warning("No valid objectives with conversion data found for this Advertiser.")
+            else:
+                # Add "Select All" option
+                objective_options = ["Select All"] + final_objectives
+                selected_objective = st.selectbox("Choose an Objective to Analyze", options=objective_options)
+                
+                # 4. Percentage Increase Input
+                percentage_increase = st.number_input("Enter Percentage Budget Increase (%)", min_value=0, max_value=200, value=20, step=5)
 
-                # 3. Objective Selection from filtered data
-                # Define objectives to exclude
-                excluded_objectives = ['Reach', 'Video Views', 'Reach & Frequency', 'TopView', 'Top Feed', 'TikTok Pulse']
-                
-                # Filter for objectives with conversions > 0
-                objective_conversions = advertiser_data.groupby(objective_column)[conversions_column].sum()
-                valid_objectives = objective_conversions[objective_conversions > 0].index.tolist()
-                
-                # Filter out the excluded objectives
-                final_objectives = [obj for obj in valid_objectives if obj not in excluded_objectives]
-                
-                if not final_objectives:
-                    st.warning("No valid objectives with conversion data found for this Advertiser.")
-                else:
-                    # Add "Select All" option
-                    objective_options = ["Select All"] + final_objectives
-                    selected_objective = st.selectbox("Choose an Objective to Analyze", options=objective_options)
+                # 5. Run Analysis Button
+                if st.button("Generate Forecast"):
+                    # Filter data for the final analysis based on objective selection
+                    if selected_objective == "Select All":
+                        analysis_df = data
+                    else:
+                        analysis_df = data[data[objective_column] == selected_objective]
                     
-                    # 4. Percentage Increase Input
-                    percentage_increase = st.number_input("Enter Percentage Budget Increase (%)", min_value=0, max_value=200, value=20, step=5)
+                    with st.spinner('Running forecasting model... This may take a few minutes.'):
+                        fig, image_bytes, summary_res = create_forecast_and_outputs(
+                            _df=analysis_df,
+                            spend_column=spend_column,
+                            conversions_column=conversions_column,
+                            percentage_increase=percentage_increase
+                        )
 
-                    # 5. Run Analysis Button
-                    if st.button("Generate Forecast"):
-                        # Filter data for the final analysis based on objective selection
-                        if selected_objective == "Select All":
-                            analysis_df = advertiser_data
-                        else:
-                            analysis_df = advertiser_data[advertiser_data[objective_column] == selected_objective]
+                    # 6. Display Outputs
+                    if fig:
+                        st.markdown("---")
+                        st.markdown(f"## {advertiser_name} Campaign Analysis")
+                        st.markdown(f"### Forecast for Objective: {selected_objective}")
+                        st.markdown(f"## Expected Conversions: {summary_res['potential_conv']:.0f} (vs. {summary_res['current_conv']:.0f} currently)")
+                        st.markdown(f"## Expected CPA: ${summary_res['potential_cpa']:.2f} (vs. ${summary_res['current_cpa']:.2f} currently)")
+                        st.markdown("---")
                         
-                        with st.spinner('Running forecasting model... This may take a few minutes.'):
-                            fig, image_bytes, summary_res = create_forecast_and_outputs(
-                                _df=analysis_df,
-                                spend_column=spend_column,
-                                conversions_column=conversions_column,
-                                percentage_increase=percentage_increase
-                            )
+                        st.pyplot(fig)
+                        
+                        st.download_button(
+                            label="Download Graph as PNG",
+                            data=image_bytes,
+                            file_name=f'forecast_{advertiser_name}_{selected_objective}.png',
+                            mime='image/png'
+                        )
 
-                        # 6. Display Outputs
-                        if fig:
-                            st.markdown("---")
-                            st.markdown(f"## {selected_account_name} Campaign Analysis")
-                            st.markdown(f"### Forecast for Objective: {selected_objective}")
-                            st.markdown(f"## Expected Conversions: {summary_res['potential_conv']:.0f} (vs. {summary_res['current_conv']:.0f} currently)")
-                            st.markdown(f"## Expected CPA: ${summary_res['potential_cpa']:.2f} (vs. ${summary_res['current_cpa']:.2f} currently)")
-                            st.markdown("---")
-                            
-                            st.pyplot(fig)
-                            
-                            st.download_button(
-                                label="Download Graph as PNG",
-                                data=image_bytes,
-                                file_name=f'forecast_{selected_account_name}_{selected_objective}.png',
-                                mime='image/png'
-                            )
+                        # Analysis Bullet Points
+                        st.markdown("---")
+                        st.subheader("Analysis")
+                        
+                        # Use st.text to ensure consistent font and no markdown interpretation
+                        summary_bullet_1 = (
+                            f"• Current State: The campaigns are currently averaging ${summary_res['current_spend']:,.2f} in daily spend, "
+                            f"resulting in approximately {summary_res['current_conv']:.0f} conversions at a CPA of ${summary_res['current_cpa']:.2f}."
+                        )
+                        st.text(summary_bullet_1)
 
-                            # Analysis Bullet Points
-                            st.markdown("---")
-                            st.subheader("Analysis")
-                            
-                            # Use st.text to ensure consistent font and no markdown interpretation
-                            summary_bullet_1 = (
-                                f"• Current State: The campaigns are currently averaging ${summary_res['current_spend']:,.2f} in daily spend, "
-                                f"resulting in approximately {summary_res['current_conv']:.0f} conversions at a CPA of ${summary_res['current_cpa']:.2f}."
-                            )
-                            st.text(summary_bullet_1)
-
-                            summary_bullet_2 = (
-                                f"• Growth Opportunity: Increasing the daily budget by {summary_res['percentage_increase']}% to ${summary_res['potential_spend']:,.2f} "
-                                f"is forecasted to yield approximately {summary_res['potential_conv']:.0f} conversions. The model predicts this increase would be cost-effective, "
-                                f"with an expected CPA of ${summary_res['potential_cpa']:.2f}."
-                            )
-                            st.text(summary_bullet_2)
+                        summary_bullet_2 = (
+                            f"• Growth Opportunity: Increasing the daily budget by {summary_res['percentage_increase']}% to ${summary_res['potential_spend']:,.2f} "
+                            f"is forecasted to yield approximately {summary_res['potential_conv']:.0f} conversions. The model predicts this increase would be cost-effective, "
+                            f"with an expected CPA of ${summary_res['potential_cpa']:.2f}."
+                        )
+                        st.text(summary_bullet_2)
 
     except Exception as e:
         st.error(f"An error occurred while processing the file: {e}")
