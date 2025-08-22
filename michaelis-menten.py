@@ -34,7 +34,7 @@ def create_forecast_and_outputs(_df, spend_column, conversions_column, percentag
         with pm.Model() as model:
             # Priors for the Michaelis-Menten function parameters: f(x) = (Vmax * x) / (Km + x)
             # Vmax (Maximum Conversions): The theoretical maximum number of conversions (asymptote).
-            Vmax = pm.TruncatedNormal("Vmax", mu=conversions_obs.max() * 1.5, sigma=conversions_obs.max(), lower=conversions_obs.max())
+            Vmax = pm.HalfNormal("Vmax", sigma=conversions_obs.max() * 2)
             
             # Km (Half-saturation constant): The spend level at which half of Vmax is achieved.
             # Represents the point of diminishing returns.
@@ -56,7 +56,8 @@ def create_forecast_and_outputs(_df, spend_column, conversions_column, percentag
         current_avg_spend = spend_obs.mean()
         potential_spend = current_avg_spend * (1 + percentage_increase / 100)
         
-        budget_range = np.linspace(1, max(spend_obs.max(), potential_spend) * 1.2, 200)
+        # Extend the budget range to better visualize the plateau
+        budget_range = np.linspace(1, max(spend_obs.max(), potential_spend) * 2.0, 200)
         
         post = az.extract(trace, var_names=["Vmax", "Km", "sigma"])
         
@@ -77,6 +78,7 @@ def create_forecast_and_outputs(_df, spend_column, conversions_column, percentag
         
         # Point of diminishing returns is represented by Km
         diminishing_returns_spend = trace.posterior['Km'].mean().item()
+        conv_at_diminishing_returns = predict_conversions(diminishing_returns_spend, trace)
 
         # --- Create Graph ---
         plt.rcParams['font.family'] = 'Roboto'
@@ -86,24 +88,24 @@ def create_forecast_and_outputs(_df, spend_column, conversions_column, percentag
         ax.plot(budget_range, mean_predictions, c='royalblue', lw=3, label='Potential Conversion Growth Curve')
         ax.plot(current_avg_spend, current_avg_conv, 'o', color='darkorange', markersize=10, zorder=5, label='Current Average Position')
         ax.plot(potential_spend, potential_conv, '*', color='seagreen', markersize=15, zorder=5, label=f'Forecast at +{percentage_increase}% Spend')
+        ax.plot(diminishing_returns_spend, conv_at_diminishing_returns, 'D', color='crimson', markersize=10, zorder=5, label='Point of Diminishing Returns')
         
         # Add dotted lines for the forecast point
         ax.vlines(x=potential_spend, ymin=0, ymax=potential_conv, color='seagreen', linestyle='--', alpha=0.7)
         ax.hlines(y=potential_conv, xmin=0, xmax=potential_spend, color='seagreen', linestyle='--', alpha=0.7)
         
         # Add a line for the point of diminishing returns (Km)
-        ax.axvline(x=diminishing_returns_spend, color='crimson', linestyle='--', lw=2, label=f'Point of Diminishing Returns')
+        ax.axvline(x=diminishing_returns_spend, color='crimson', linestyle='--', lw=2)
 
         ax.set_xlabel(f'Daily Spend ({spend_column})', fontsize=12)
-        ax.set_ylabel('Predicted Daily Conversions', fontsize=12, color='royalblue')
-        ax.tick_params(axis='y', labelcolor='royalblue')
+        ax.set_ylabel('Predicted Daily Conversions', fontsize=12)
         ax.set_ylim(0, max(mean_predictions.max(), potential_conv) * 1.1)
         ax.set_xlim(0, budget_range.max())
 
         ax.set_title(f'Spend vs. Conversions Forecast', fontsize=16, fontweight='bold')
         fig.tight_layout()
         
-        ax.legend(loc='upper left')
+        ax.legend(loc='lower right')
         
         buf = io.BytesIO()
         plt.savefig(buf, format='png')
@@ -117,7 +119,8 @@ def create_forecast_and_outputs(_df, spend_column, conversions_column, percentag
             "potential_conv": potential_conv,
             "current_cpa": current_cpa,
             "potential_cpa": potential_cpa,
-            "percentage_increase": percentage_increase
+            "percentage_increase": percentage_increase,
+            "diminishing_returns_spend": diminishing_returns_spend
         }
         
         return fig, image_bytes, summary_results
@@ -223,6 +226,13 @@ if uploaded_file is not None:
                             f"with an expected CPA of ${summary_res['potential_cpa']:.2f}."
                         )
                         st.text(summary_bullet_2)
+
+                        summary_bullet_3 = (
+                             f"• Point of Diminishing Returns: The model identifies the point of maximum efficiency at a daily spend of ${summary_res['diminishing_returns_spend']:,.2f}. "
+                             f"Beyond this point, each additional dollar invested will generate progressively fewer conversions."
+                        )
+                        st.text(summary_bullet_3)
+
 
     except Exception as e:
         st.error(f"An error occurred while processing the file: {e}")
