@@ -14,7 +14,7 @@ import io
 @st.cache_data
 def create_forecast_and_outputs(_df, spend_column, conversions_column, percentage_increase):
     """
-    Runs the Bayesian model, creates the plot, and generates the summary text.
+    Runs the Bayesian Michaelis-Menten model, creates the plot, and generates the summary text.
 
     Args:
         _df (pd.DataFrame): The filtered and cleaned input DataFrame.
@@ -30,29 +30,21 @@ def create_forecast_and_outputs(_df, spend_column, conversions_column, percentag
         spend_obs = _df[spend_column].values
         conversions_obs = _df[conversions_column].values
 
-        # --- Data Normalization ---
-        # Normalize spend data to a 0-1 scale for model stability.
-        spend_max = spend_obs.max()
-        spend_normalized = spend_obs / spend_max
-
-        # --- Bayesian Sigmoid Growth Model ---
+        # --- Bayesian Michaelis-Menten Growth Model ---
         with pm.Model() as model:
-            # Priors for the sigmoid function parameters: f(x) = L * sigmoid(k * (x - x0))
-            # L (Limit/Capacity): Using a TruncatedNormal to ensure the value is strictly positive
-            # and logically starts above the highest observed conversion count.
-            L = pm.TruncatedNormal("L", mu=conversions_obs.max() * 1.5, sigma=conversions_obs.max() * 0.5, lower=conversions_obs.max())
+            # Priors for the Michaelis-Menten function parameters: f(x) = (Vmax * x) / (Km + x)
+            # Vmax (Maximum Conversions): The theoretical maximum number of conversions (asymptote).
+            Vmax = pm.TruncatedNormal("Vmax", mu=conversions_obs.max() * 1.5, sigma=conversions_obs.max(), lower=conversions_obs.max())
             
-            # k (Steepness): On the normalized scale, a sigma of 5 is a reasonable prior.
-            k = pm.HalfNormal("k", sigma=5)
-            
-            # x0 (Midpoint): On the normalized scale, the midpoint should be between 0 and 1.
-            x0 = pm.Normal("x0", mu=0.5, sigma=0.2)
+            # Km (Half-saturation constant): The spend level at which half of Vmax is achieved.
+            # Represents the point of diminishing returns.
+            Km = pm.HalfNormal("Km", sigma=np.std(spend_obs) * 2)
             
             # Sigma: The noise or variability of the data around the curve.
             sigma = pm.HalfNormal("sigma", sigma=np.std(conversions_obs))
 
-            # Expected conversions based on the sigmoid function using pm.math.sigmoid
-            mu = L * pm.math.sigmoid(k * (spend_normalized - x0))
+            # Expected conversions based on the Michaelis-Menten function
+            mu = (Vmax * spend_obs) / (Km + spend_obs)
 
             # Likelihood of the observed data
             y_obs = pm.Normal("y_obs", mu=mu, sigma=sigma, observed=conversions_obs)
@@ -60,64 +52,58 @@ def create_forecast_and_outputs(_df, spend_column, conversions_column, percentag
             # Sample from the posterior distribution using a robust initialization method
             trace = pm.sample(2000, tune=1000, chains=4, target_accept=0.95, cores=1, init='advi+adapt_diag')
 
-        # --- Generate Forecast and Analyze Results (on De-normalized Scale) ---
+        # --- Generate Forecast and Analyze Results ---
         current_avg_spend = spend_obs.mean()
         potential_spend = current_avg_spend * (1 + percentage_increase / 100)
         
         budget_range = np.linspace(1, max(spend_obs.max(), potential_spend) * 1.2, 200)
-        budget_range_normalized = budget_range / spend_max
-
-        post = az.extract(trace, var_names=["L", "k", "x0", "sigma"])
-        mu_curves = post["L"].values[:, np.newaxis] * expit(post["k"].values[:, np.newaxis] * (budget_range_normalized - post["x0"].values[:, np.newaxis]))
+        
+        post = az.extract(trace, var_names=["Vmax", "Km", "sigma"])
+        
+        # Calculate the expected conversion value (mu) for each posterior sample across the budget range
+        mu_curves = (post["Vmax"].values[:, np.newaxis] * budget_range) / (post["Km"].values[:, np.newaxis] + budget_range)
         mean_predictions = mu_curves.mean(axis=0)
-        modeled_cpa = budget_range / mean_predictions
         
         def predict_conversions(spend_value, trace):
-            spend_val_normalized = spend_value / spend_max
-            L_samples = trace.posterior['L'].values.flatten()
-            k_samples = trace.posterior['k'].values.flatten()
-            x0_samples = trace.posterior['x0'].values.flatten()
-            return (L_samples * expit(k_samples * (spend_val_normalized - x0_samples))).mean()
+            Vmax_samples = trace.posterior['Vmax'].values.flatten()
+            Km_samples = trace.posterior['Km'].values.flatten()
+            return ((Vmax_samples * spend_value) / (Km_samples + spend_value)).mean()
 
         current_avg_conv = predict_conversions(current_avg_spend, trace)
         potential_conv = predict_conversions(potential_spend, trace)
         
         current_cpa = current_avg_spend / current_avg_conv
         potential_cpa = potential_spend / potential_conv
+        
+        # Point of diminishing returns is represented by Km
+        diminishing_returns_spend = trace.posterior['Km'].mean().item()
 
         # --- Create Graph ---
         plt.rcParams['font.family'] = 'Roboto'
         plt.style.use('seaborn-v0_8-whitegrid')
-        fig, ax1 = plt.subplots(figsize=(12, 8))
+        fig, ax = plt.subplots(figsize=(12, 8))
 
-        ax1.plot(budget_range, mean_predictions, c='royalblue', lw=3, label='Potential Conversion Growth Curve')
-        ax1.plot(current_avg_spend, current_avg_conv, 'o', color='darkorange', markersize=10, zorder=5, label='Current Average Position')
-        ax1.plot(potential_spend, potential_conv, '*', color='seagreen', markersize=15, zorder=5, label=f'Forecast at +{percentage_increase}% Spend')
+        ax.plot(budget_range, mean_predictions, c='royalblue', lw=3, label='Potential Conversion Growth Curve')
+        ax.plot(current_avg_spend, current_avg_conv, 'o', color='darkorange', markersize=10, zorder=5, label='Current Average Position')
+        ax.plot(potential_spend, potential_conv, '*', color='seagreen', markersize=15, zorder=5, label=f'Forecast at +{percentage_increase}% Spend')
         
         # Add dotted lines for the forecast point
-        ax1.vlines(x=potential_spend, ymin=0, ymax=potential_conv, color='seagreen', linestyle='--', alpha=0.7)
-        ax1.hlines(y=potential_conv, xmin=0, xmax=potential_spend, color='seagreen', linestyle='--', alpha=0.7)
+        ax.vlines(x=potential_spend, ymin=0, ymax=potential_conv, color='seagreen', linestyle='--', alpha=0.7)
+        ax.hlines(y=potential_conv, xmin=0, xmax=potential_spend, color='seagreen', linestyle='--', alpha=0.7)
+        
+        # Add a line for the point of diminishing returns (Km)
+        ax.axvline(x=diminishing_returns_spend, color='crimson', linestyle='--', lw=2, label=f'Point of Diminishing Returns')
 
-        ax1.set_xlabel(f'Daily Spend ({spend_column})', fontsize=12)
-        ax1.set_ylabel('Predicted Daily Conversions', fontsize=12, color='royalblue')
-        ax1.tick_params(axis='y', labelcolor='royalblue')
-        ax1.set_ylim(0, max(mean_predictions.max(), potential_conv) * 1.1)
-        ax1.set_xlim(0, budget_range.max())
+        ax.set_xlabel(f'Daily Spend ({spend_column})', fontsize=12)
+        ax.set_ylabel('Predicted Daily Conversions', fontsize=12, color='royalblue')
+        ax.tick_params(axis='y', labelcolor='royalblue')
+        ax.set_ylim(0, max(mean_predictions.max(), potential_conv) * 1.1)
+        ax.set_xlim(0, budget_range.max())
 
-        ax2 = ax1.twinx()
-        ax2.plot(budget_range, modeled_cpa, c='gray', linestyle=':', lw=2, label='Modeled CPA')
-        ax2.plot(current_avg_spend, current_cpa, 'o', color='darkorange', markersize=10, zorder=5)
-        ax2.plot(potential_spend, potential_cpa, '*', color='seagreen', markersize=15, zorder=5)
-        ax2.set_ylabel('Cost Per Acquisition (CPA)', fontsize=12, color='gray')
-        ax2.tick_params(axis='y', labelcolor='gray')
-        ax2.set_ylim(0, modeled_cpa[~np.isinf(modeled_cpa)].max() * 1.2)
-
-        ax1.set_title(f'Spend vs. Conversions Forecast', fontsize=16, fontweight='bold')
+        ax.set_title(f'Spend vs. Conversions Forecast', fontsize=16, fontweight='bold')
         fig.tight_layout()
         
-        lines1, labels1 = ax1.get_legend_handles_labels()
-        lines2, labels2 = ax2.get_legend_handles_labels()
-        ax1.legend(lines1 + lines2, labels1 + labels2, loc='upper left')
+        ax.legend(loc='upper left')
         
         buf = io.BytesIO()
         plt.savefig(buf, format='png')
