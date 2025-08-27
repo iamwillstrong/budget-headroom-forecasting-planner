@@ -7,11 +7,9 @@ import arviz as az
 from scipy.special import expit
 import io
 
-# --- Main Analysis and Visualization Function (Cached for Performance) ---
-# This function runs the core modeling and generates all outputs.
-# Streamlit's cache decorator prevents re-running this heavy computation on every interaction.
+# --- Main Analysis and Visualization Function ---
+# The cache decorator has been removed to ensure the model re-runs with each new file.
 
-@st.cache_data
 def create_forecast_and_outputs(_df, spend_column, conversions_column, percentage_increase):
     """
     Runs the Bayesian Michaelis-Menten model, creates the plot, and generates the summary text.
@@ -145,6 +143,16 @@ if uploaded_file is not None:
         objective_column = 'Objective Type'
         spend_column = 'Cost (USD)'
         conversions_column = 'Conversions'
+
+        # --- NEW: Robust Data Cleaning Step ---
+        # Clean the spend and conversions columns immediately after loading
+        if spend_column in data.columns:
+            data[spend_column] = data[spend_column].astype(str).str.replace("'", "").str.replace(",", "")
+            data[spend_column] = pd.to_numeric(data[spend_column], errors='coerce')
+        
+        if conversions_column in data.columns:
+            data[conversions_column] = data[conversions_column].astype(str).str.replace("'", "").str.replace(",", "")
+            data[conversions_column] = pd.to_numeric(data[conversions_column], errors='coerce')
 
         # Check if required columns exist
         required_cols = [advertiser_id_column, account_name_column, objective_column, spend_column, conversions_column]
