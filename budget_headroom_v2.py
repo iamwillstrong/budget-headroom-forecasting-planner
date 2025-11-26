@@ -116,7 +116,6 @@ if uploaded_file is not None:
         df = pd.read_csv(uploaded_file)
         
         # --- DATA MAPPING ---
-        # UPDATED: Now maps 'Ad Group Name' instead of ID
         col_map = {
             'p_date': 'Date',
             'Cost (USD)': 'Spend', 
@@ -134,7 +133,6 @@ if uploaded_file is not None:
         df['Date'] = pd.to_datetime(df['Date'], format='%Y-%m-%d', errors='coerce')
         
         # --- FILTERING LOGIC ---
-        # UPDATED: Uses Ad_Group_Name for sorting and display
         unique_ad_groups = sorted(df['Ad_Group_Name'].unique().astype(str))
         options = ["All Data"] + unique_ad_groups
         
@@ -152,7 +150,6 @@ if uploaded_file is not None:
             filtered_df = df.copy()
             selection_label = "All Account Data"
         else:
-            # UPDATED: Filters by Name
             filtered_df = df[df['Ad_Group_Name'].astype(str).isin(selected_options)]
             selection_label = f"Selection ({len(selected_options)} Ad Groups)"
 
@@ -269,10 +266,11 @@ if uploaded_file is not None:
 
         # --- 6. REPORT & PDF DATA ---
         
-        if marginal_cpa > (current_cpa * 1.5):
+        # UPDATED SATURATION PARAMETERS
+        if marginal_cpa > (current_cpa * 2.0):
             status_color = "🔴"
             status_msg = "Diminishing Returns (High Saturation)"
-        elif marginal_cpa > (current_cpa * 1.15):
+        elif marginal_cpa > (current_cpa * 1.5):
             status_color = "🟡"
             status_msg = "Moderate Headroom"
         else:
