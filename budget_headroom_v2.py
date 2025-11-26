@@ -71,8 +71,15 @@ def create_pdf_report(fig, report_data):
 
     # Section: Marginal Efficiency
     pdf.set_font("Arial", 'B', 12)
-    pdf.set_text_color(255, 0, 0) # Red for emphasis
-    pdf.cell(0, 10, "Marginal Efficiency (Diminishing Returns)", 0, 1)
+    # Dynamic color for PDF text based on status
+    if "High Saturation" in report_data['status']:
+        pdf.set_text_color(255, 0, 0) # Red
+    elif "Moderate" in report_data['status']:
+        pdf.set_text_color(200, 150, 0) # Dark Gold
+    else:
+        pdf.set_text_color(0, 128, 0) # Green
+
+    pdf.cell(0, 10, "Marginal Efficiency Status", 0, 1)
     pdf.set_text_color(0, 0, 0) # Reset color
     pdf.set_font("Arial", size=11)
     pdf.multi_cell(0, 7, txt=f"Marginal CPA (Cost of extra results): {report_data['marg_cpa']}\n"
@@ -266,8 +273,11 @@ if uploaded_file is not None:
 
         # --- 6. REPORT & STATUS LOGIC ---
         
-        # Determine Color Codes
-        # Using custom HEX to control the exact color of the 'chip' (delta)
+        # LOGIC PARAMETERS:
+        # 1. Marginal > 2.0x Current = RED
+        # 2. Marginal > 1.5x Current = YELLOW
+        # 3. Marginal <= 1.5x Current = GREEN (Scalable)
+        
         if marginal_cpa > (current_cpa * 2.0):
             status_color_icon = "🔴"
             status_msg = "Diminishing Returns (High Saturation)"
@@ -275,7 +285,7 @@ if uploaded_file is not None:
         elif marginal_cpa > (current_cpa * 1.5):
             status_color_icon = "🟡"
             status_msg = "Moderate Headroom"
-            delta_color_hex = "#e6b800" # Dark Yellow/Gold (Readable on white)
+            delta_color_hex = "#e6b800" # Dark Yellow
         else:
             status_color_icon = "🟢"
             status_msg = "High Headroom (Scalable)"
@@ -283,10 +293,9 @@ if uploaded_file is not None:
 
         st.subheader("Predictive Analysis")
         
-        # Using HTML/CSS columns to enforce specific colors on the metrics
         col1, col2, col3 = st.columns(3)
         
-        # 1. Current CPA (Standard HTML styling)
+        # 1. Current CPA
         with col1:
             st.markdown(f"""
             <div style="padding: 10px;">
@@ -295,7 +304,7 @@ if uploaded_file is not None:
             </div>
             """, unsafe_allow_html=True)
             
-        # 2. Projected CPA (Custom HTML to match delta color to status)
+        # 2. Projected CPA (With Dynamic Color Chip)
         with col2:
             delta_val = ((new_cpa - current_cpa) / (current_cpa + 1e-9)) * 100
             st.markdown(f"""
@@ -310,7 +319,7 @@ if uploaded_file is not None:
             </div>
             """, unsafe_allow_html=True)
 
-        # 3. Marginal CPA (Standard HTML styling)
+        # 3. Marginal CPA
         with col3:
             st.markdown(f"""
             <div style="padding: 10px;">
