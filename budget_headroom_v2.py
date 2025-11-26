@@ -3,9 +3,12 @@ import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 from scipy.optimize import curve_fit
+from fpdf import FPDF
+import tempfile
+import os
 
 # --- CONFIGURATION ---
-st.set_page_config(page_title="TikTok Bidding Headroom Predictor", layout="wide")
+st.set_page_config(page_title="Ad Group Projected Headroom", layout="wide")
 
 # --- HELPER FUNCTIONS ---
 
@@ -13,20 +16,80 @@ def saturate_hill(spend, max_conversions, k):
     """
     Hill Function for Media Mix Modeling.
     """
-    # FIX: Added 1e-10 (epsilon) to denominator to prevent division by zero 
-    # without breaking array operations.
+    # Added epsilon to prevent division by zero
     return (max_conversions * spend) / (k + spend + 1e-10)
 
 def format_currency(value):
     return f"${value:,.2f}"
 
+def create_pdf_report(fig, report_data):
+    """
+    Generates a PDF report containing the chart and the analysis text.
+    """
+    class PDF(FPDF):
+        def header(self):
+            self.set_font('Arial', 'B', 15)
+            self.cell(0, 10, 'Ad Group Headroom Report', 0, 1, 'C')
+            self.ln(10)
+
+    pdf = PDF()
+    pdf.add_page()
+    pdf.set_font("Arial", size=11)
+
+    # 1. Save Plotly Figure as Image
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmpfile:
+        # High-res static image export
+        try:
+            fig.write_image(tmpfile.name, scale=2)
+            pdf.image(tmpfile.name, x=10, y=30, w=190)
+        except Exception as e:
+            pdf.cell(0, 10, "Error rendering chart image. Please ensure 'kaleido' is installed.", 0, 1)
+        
+        tmp_path = tmpfile.name
+
+    # 2. Add Analysis Text (Positioned below image)
+    pdf.set_y(140) 
+    
+    # Section: Current State
+    pdf.set_font("Arial", 'B', 12)
+    pdf.cell(0, 10, "Current State", 0, 1)
+    pdf.set_font("Arial", size=11)
+    pdf.multi_cell(0, 7, txt=f"Selected Scope: {report_data['scope']}\n"
+                             f"Current Daily Spend: {report_data['curr_spend']}\n"
+                             f"Current Daily Conversions: {report_data['curr_conv']}\n"
+                             f"Current CPA: {report_data['curr_cpa']}")
+    pdf.ln(5)
+
+    # Section: Projection
+    pdf.set_font("Arial", 'B', 12)
+    pdf.cell(0, 10, "Projected Scenario", 0, 1)
+    pdf.set_font("Arial", size=11)
+    pdf.multi_cell(0, 7, txt=f"Proposed Budget Increase: {report_data['pct_inc']}\n"
+                             f"New Daily Spend: {report_data['new_spend']}\n"
+                             f"Projected Conversions: {report_data['new_conv']} (+{report_data['delta_conv']})\n"
+                             f"Projected CPA: {report_data['new_cpa']}\n")
+    pdf.ln(5)
+
+    # Section: Marginal Efficiency
+    pdf.set_font("Arial", 'B', 12)
+    pdf.set_text_color(255, 0, 0) # Red for emphasis
+    pdf.cell(0, 10, "Marginal Efficiency (Diminishing Returns)", 0, 1)
+    pdf.set_text_color(0, 0, 0) # Reset color
+    pdf.set_font("Arial", size=11)
+    pdf.multi_cell(0, 7, txt=f"Marginal CPA (Cost of extra results): {report_data['marg_cpa']}\n"
+                             f"Status: {report_data['status']}")
+
+    # Cleanup temp file
+    try:
+        os.remove(tmp_path)
+    except:
+        pass
+
+    return pdf.output(dest='S').encode('latin-1')
+
 # --- APP LAYOUT ---
 
-st.title("📉 TikTok Campaign Headroom & Saturation Model")
-st.markdown("""
-**Goal:** Visualize the point of diminishing returns (Bidding Headroom).
-**Instructions:** Upload your CSV with the standard schema (`p_date`, `Ad Group ID`, `Cost (USD)`, `Conversions`).
-""")
+st.title("Ad group projected headroom")
 
 # 1. SIDEBAR: DATA INPUT & CONTROLS
 with st.sidebar:
@@ -60,24 +123,18 @@ if uploaded_file is not None:
             'Ad Group ID': 'Ad_Group_ID'
         }
         
-        # Check if columns exist before renaming
         missing_cols = [key for key in col_map.keys() if key not in df.columns]
         if missing_cols:
             st.error(f"CSV is missing the following columns: {missing_cols}")
             st.stop()
             
         df = df.rename(columns=col_map)
-        
-        # Parse Dates
         df['Date'] = pd.to_datetime(df['Date'], format='%Y-%m-%d', errors='coerce')
         
         # --- FILTERING LOGIC ---
-        
-        # Get unique Ad Groups for dropdown, sorted
         unique_ad_groups = sorted(df['Ad_Group_ID'].unique().astype(str))
         options = ["All Data"] + unique_ad_groups
         
-        # Dropdown Menu
         selected_options = st.multiselect(
             "Select Ad Groups to Analyze",
             options=options,
@@ -85,10 +142,9 @@ if uploaded_file is not None:
         )
         
         if not selected_options:
-            st.warning("Please select at least one Ad Group or 'All Data'.")
+            st.warning("Please select at least one Ad Group.")
             st.stop()
 
-        # Filter Data
         if "All Data" in selected_options:
             filtered_df = df.copy()
             selection_label = "All Account Data"
@@ -103,112 +159,125 @@ if uploaded_file is not None:
             'CPM': 'mean' 
         }).reset_index()
 
-        # Remove zero spend days
         model_df = daily_df[daily_df['Spend'] > 0]
         
         if len(model_df) < 5:
-            st.error("Not enough data points (days with spend) to generate a predictive curve. You need at least 5 days of data.")
+            st.error("Not enough data points (days with spend) to generate a predictive curve.")
             st.stop()
 
-        # --- 3. THE MATH (CURVE FITTING) ---
+        # --- 3. THE MATH ---
         x_data = model_df['Spend']
         y_data = model_df['Conversions']
 
-        # Initial parameter guesses
         p0 = [y_data.max() * 2, x_data.mean()]
         
         try:
-            # Fit the Hill function
             popt, pcov = curve_fit(saturate_hill, x_data, y_data, p0=p0, maxfev=10000)
             max_conv_model, k_model = popt
-        except Exception as e:
-            st.warning("Could not fit a perfect curve (Linear data?). Showing best approximation.")
+        except:
+            st.warning("Could not fit a perfect curve. Showing approximation.")
             max_conv_model = y_data.max() * 5
             k_model = x_data.max() * 5
 
-        # --- 4. CALCULATE SCENARIOS ---
-        
-        # Current State
+        # --- 4. SCENARIOS ---
         current_avg_spend = x_data.mean()
         current_est_conv = saturate_hill(current_avg_spend, max_conv_model, k_model)
-        # Avoid zero division in display math
         current_cpa = current_avg_spend / current_est_conv if current_est_conv > 1e-9 else 0
         
-        # Future State
         new_spend = current_avg_spend * (1 + budget_increase_pct)
         new_est_conv = saturate_hill(new_spend, max_conv_model, k_model)
         new_cpa = new_spend / new_est_conv if new_est_conv > 1e-9 else 0
         
-        # Marginal Metrics
         delta_spend = new_spend - current_avg_spend
         delta_conv = new_est_conv - current_est_conv
         marginal_cpa = delta_spend / delta_conv if delta_conv > 1e-9 else 0
 
         # --- 5. VISUALIZATION ---
-        
-        # Generate curve points
         x_range = np.linspace(0, x_data.max() * 2.5, 100) 
         y_range = saturate_hill(x_range, max_conv_model, k_model)
 
         fig = go.Figure()
 
-        # Scatter: Actual Daily Data
+        # 1. Actual Data
         fig.add_trace(go.Scatter(
             x=x_data, y=y_data, 
             mode='markers', name='Daily Performance',
-            marker=dict(color='gray', opacity=0.4, size=8)
+            marker=dict(color='gray', opacity=0.3, size=7)
         ))
 
-        # Line: The Model Curve
+        # 2. The Curve (Legend Hidden)
         fig.add_trace(go.Scatter(
             x=x_range, y=y_range, 
             mode='lines', name='Saturation Curve',
+            showlegend=False, # HIDDEN PER REQUEST
             line=dict(color='#ff0050', width=3)
         ))
 
-        # Point: Current State
+        # 3. Current State Point
         fig.add_trace(go.Scatter(
             x=[current_avg_spend], y=[current_est_conv],
             mode='markers+text', name='Current Avg',
-            text=['Current'], textposition="bottom right",
+            text=['Current'], textposition="top left",
             marker=dict(color='blue', size=12, symbol='diamond')
         ))
 
-        # Point: Future State
+        # 4. Projected State Point
         fig.add_trace(go.Scatter(
             x=[new_spend], y=[new_est_conv],
             mode='markers+text', name='Projected',
-            text=[f'+{int(budget_increase_pct*100)}% Spend'], textposition="top left",
+            text=['Projected'], textposition="top left",
             marker=dict(color='#00f2ea', size=14, symbol='star')
         ))
 
+        # 5. DOTTED DROP LINES (Visual Aid)
+        # Line for Current Spend (Vertical to X axis)
+        fig.add_shape(type="line",
+            x0=current_avg_spend, y0=0, x1=current_avg_spend, y1=current_est_conv,
+            line=dict(color="blue", width=1, dash="dot")
+        )
+        # Line for Current Conversions (Horizontal to Y axis)
+        fig.add_shape(type="line",
+            x0=0, y0=current_est_conv, x1=current_avg_spend, y1=current_est_conv,
+            line=dict(color="blue", width=1, dash="dot")
+        )
+        # Line for Projected Spend (Vertical to X axis)
+        fig.add_shape(type="line",
+            x0=new_spend, y0=0, x1=new_spend, y1=new_est_conv,
+            line=dict(color="#00f2ea", width=1, dash="dot")
+        )
+        # Line for Projected Conversions (Horizontal to Y axis)
+        fig.add_shape(type="line",
+            x0=0, y0=new_est_conv, x1=new_spend, y1=new_est_conv,
+            line=dict(color="#00f2ea", width=1, dash="dot")
+        )
+
         fig.update_layout(
-            title=f"Headroom Model: {selection_label}",
+            title=f"Ad Group Headroom: {selection_label}",
             xaxis_title="Daily Spend (USD)",
             yaxis_title="Daily Conversions",
             template="plotly_white",
-            height=500
+            height=500,
+            xaxis=dict(showspikes=False), # We are using manual lines instead
+            yaxis=dict(showspikes=False)
         )
 
         st.plotly_chart(fig, use_container_width=True)
 
-        # --- 6. REPORT ---
+        # --- 6. REPORT & PDF DATA ---
         
-        # Color coding logic
         if marginal_cpa > (current_cpa * 1.5):
-            status_color = "🔴" # Red
-            status_msg = "High Saturation (Diminishing Returns)"
+            status_color = "🔴"
+            status_msg = "Diminishing Returns (High Saturation)"
         elif marginal_cpa > (current_cpa * 1.15):
-            status_color = "🟡" # Yellow
+            status_color = "🟡"
             status_msg = "Moderate Headroom"
         else:
-            status_color = "🟢" # Green
+            status_color = "🟢"
             status_msg = "High Headroom (Scalable)"
 
         st.subheader("Predictive Analysis")
         
         col1, col2, col3 = st.columns(3)
-        
         with col1:
             st.metric("Current Avg CPA", format_currency(current_cpa))
         with col2:
@@ -225,6 +294,38 @@ if uploaded_file is not None:
         * You can expect to generate **{int(delta_conv)} additional conversions**.
         * These specific extra conversions will cost **{format_currency(marginal_cpa)}** each (Marginal CPA).
         """)
+
+        # --- 7. PDF DOWNLOAD ---
+        
+        # Prepare data dict for the PDF generator
+        report_data = {
+            "scope": selection_label,
+            "curr_spend": format_currency(current_avg_spend),
+            "curr_conv": str(int(current_est_conv)),
+            "curr_cpa": format_currency(current_cpa),
+            "pct_inc": f"{int(budget_increase_pct*100)}%",
+            "new_spend": format_currency(new_spend),
+            "new_conv": str(int(new_est_conv)),
+            "delta_conv": str(int(delta_conv)),
+            "new_cpa": format_currency(new_cpa),
+            "marg_cpa": format_currency(marginal_cpa),
+            "status": status_msg
+        }
+
+        # Generate PDF Button
+        st.write("---")
+        st.write("### Export Report")
+        
+        if st.button("Generate PDF Report"):
+            with st.spinner("Generating PDF..."):
+                pdf_bytes = create_pdf_report(fig, report_data)
+                
+                st.download_button(
+                    label="Download Report as PDF",
+                    data=pdf_bytes,
+                    file_name="tiktok_headroom_report.pdf",
+                    mime="application/pdf"
+                )
 
     except Exception as e:
         st.error(f"Error processing file: {e}")
