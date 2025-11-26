@@ -39,7 +39,12 @@ def create_pdf_report(fig, report_data):
     # 1. Save Plotly Figure as Image
     with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmpfile:
         try:
-            fig.write_image(tmpfile.name, scale=2)
+            # FIX: Explicitly define width/height to prevents cropping/scaling issues
+            # 1200x600 is a 2:1 ratio that fits A4 landscape perfectly
+            fig.write_image(tmpfile.name, scale=2, width=1200, height=600)
+            
+            # FIX: Adjusted margins on the page (A4 width is ~210mm)
+            # x=10, w=190 leaves 10mm margins on both sides
             pdf.image(tmpfile.name, x=10, y=30, w=190)
         except Exception as e:
             pdf.cell(0, 10, "Error rendering chart image. Ensure 'kaleido' is installed.", 0, 1)
@@ -47,7 +52,7 @@ def create_pdf_report(fig, report_data):
         tmp_path = tmpfile.name
 
     # 2. Add Analysis Text
-    pdf.set_y(140) 
+    pdf.set_y(130) # Moved up slightly to accommodate the image size
     
     # Section: Current State
     pdf.set_font("Arial", 'B', 12)
@@ -238,22 +243,18 @@ if uploaded_file is not None:
         ))
 
         # 5. DOTTED DROP LINES
-        # Line for Current Spend
         fig.add_shape(type="line",
             x0=current_avg_spend, y0=0, x1=current_avg_spend, y1=current_est_conv,
             line=dict(color="blue", width=1, dash="dot")
         )
-        # Line for Current Conversions
         fig.add_shape(type="line",
             x0=0, y0=current_est_conv, x1=current_avg_spend, y1=current_est_conv,
             line=dict(color="blue", width=1, dash="dot")
         )
-        # Line for Projected Spend
         fig.add_shape(type="line",
             x0=new_spend, y0=0, x1=new_spend, y1=new_est_conv,
             line=dict(color="#00f2ea", width=1, dash="dot")
         )
-        # Line for Projected Conversions
         fig.add_shape(type="line",
             x0=0, y0=new_est_conv, x1=new_spend, y1=new_est_conv,
             line=dict(color="#00f2ea", width=1, dash="dot")
@@ -266,17 +267,18 @@ if uploaded_file is not None:
             template="plotly_white",
             height=500,
             xaxis=dict(showspikes=False),
-            yaxis=dict(showspikes=False)
+            yaxis=dict(showspikes=False),
+            # FIX: Added specific margins to prevent labels being cut off in the PDF export
+            margin=dict(l=40, r=40, t=60, b=40)
         )
 
         st.plotly_chart(fig, use_container_width=True)
 
         # --- 6. REPORT & STATUS LOGIC ---
         
-        # LOGIC PARAMETERS:
-        # 1. Marginal > 2.0x Current = RED
-        # 2. Marginal > 1.5x Current = YELLOW
-        # 3. Marginal <= 1.5x Current = GREEN (Scalable)
+        # Green (Scalable): Marginal CPA <= 1.75x Current CPA
+        # Yellow (Moderate): Marginal CPA > 1.75x AND <= 2.5x
+        # Red (High Saturation): Marginal CPA > 2.5x
         
         if marginal_cpa > (current_cpa * 2.5):
             status_color_icon = "🔴"
@@ -304,7 +306,7 @@ if uploaded_file is not None:
             </div>
             """, unsafe_allow_html=True)
             
-        # 2. Projected CPA (With Dynamic Color Chip)
+        # 2. Projected CPA
         with col2:
             delta_val = ((new_cpa - current_cpa) / (current_cpa + 1e-9)) * 100
             st.markdown(f"""
