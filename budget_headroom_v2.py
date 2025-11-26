@@ -99,7 +99,7 @@ def create_pdf_report(fig, report_data):
 
 # --- APP LAYOUT ---
 
-st.title("Ad group projected headroom")
+st.title("Ad Group Projected Headroom")
 st.markdown("""
 **Instructions:** Upload your CSV with the standard schema: `p_date`, `Ad Group Name`, `Cost (USD)`, `Conversions`.
 """)
@@ -290,7 +290,7 @@ if uploaded_file is not None:
             delta_color_hex = "#e6b800" # Dark Yellow
         else:
             status_color_icon = "🟢"
-            status_msg = "High Headroom (Scalable)"
+            status_msg = "Headroom (Scalable)"
             delta_color_hex = "#09ab3b" # Green
 
         st.subheader("Predictive Analysis")
