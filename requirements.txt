@@ -6,3 +6,5 @@ pymc
 arviz
 scipy
 plotly
+fpdf
+kaleido
