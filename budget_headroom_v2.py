@@ -12,12 +12,10 @@ st.set_page_config(page_title="TikTok Bidding Headroom Predictor", layout="wide"
 def saturate_hill(spend, max_conversions, k):
     """
     Hill Function for Media Mix Modeling.
-    max_conversions: Theoretical max daily conversions (asymptote).
-    k: Half-saturation point (spend needed to get 50% of max conversions).
     """
-    # Prevent division by zero
-    if k + spend == 0: return 0
-    return (max_conversions * spend) / (k + spend)
+    # FIX: Added 1e-10 (epsilon) to denominator to prevent division by zero 
+    # without breaking array operations.
+    return (max_conversions * spend) / (k + spend + 1e-10)
 
 def format_currency(value):
     return f"${value:,.2f}"
@@ -54,8 +52,6 @@ if uploaded_file is not None:
         df = pd.read_csv(uploaded_file)
         
         # --- DATA MAPPING ---
-        # Mapping user headers to script internal variables
-        # User headers: p_date, Ad Group ID, Frequency Cap (Per Day), Cost (USD), CPM, Conversions
         col_map = {
             'p_date': 'Date',
             'Cost (USD)': 'Spend', 
@@ -97,22 +93,17 @@ if uploaded_file is not None:
             filtered_df = df.copy()
             selection_label = "All Account Data"
         else:
-            # Convert selection back to original type (int/str) if needed, 
-            # here we assume ID matching works on string comparison or direct value
-            # Ensuring type safety for filtering
             filtered_df = df[df['Ad_Group_ID'].astype(str).isin(selected_options)]
             selection_label = f"Selection ({len(selected_options)} Ad Groups)"
 
         # --- AGGREGATION ---
-        # We must group by DATE. If multiple ad groups are selected, we sum their spend/conversions 
-        # to see the "Total Saturation" for that basket of ads.
         daily_df = filtered_df.groupby('Date').agg({
             'Spend': 'sum',
             'Conversions': 'sum',
-            'CPM': 'mean' # Average the CPM
+            'CPM': 'mean' 
         }).reset_index()
 
-        # Remove zero spend days to clean the model
+        # Remove zero spend days
         model_df = daily_df[daily_df['Spend'] > 0]
         
         if len(model_df) < 5:
@@ -123,7 +114,7 @@ if uploaded_file is not None:
         x_data = model_df['Spend']
         y_data = model_df['Conversions']
 
-        # Initial parameter guesses: [Max Conv = 2x max actual, K = mean spend]
+        # Initial parameter guesses
         p0 = [y_data.max() * 2, x_data.mean()]
         
         try:
@@ -132,26 +123,26 @@ if uploaded_file is not None:
             max_conv_model, k_model = popt
         except Exception as e:
             st.warning("Could not fit a perfect curve (Linear data?). Showing best approximation.")
-            # Fallback for linear data
             max_conv_model = y_data.max() * 5
             k_model = x_data.max() * 5
 
         # --- 4. CALCULATE SCENARIOS ---
         
-        # Current State (Average of actuals)
+        # Current State
         current_avg_spend = x_data.mean()
         current_est_conv = saturate_hill(current_avg_spend, max_conv_model, k_model)
-        current_cpa = current_avg_spend / current_est_conv if current_est_conv > 0 else 0
+        # Avoid zero division in display math
+        current_cpa = current_avg_spend / current_est_conv if current_est_conv > 1e-9 else 0
         
-        # Future State (Based on Slider)
+        # Future State
         new_spend = current_avg_spend * (1 + budget_increase_pct)
         new_est_conv = saturate_hill(new_spend, max_conv_model, k_model)
-        new_cpa = new_spend / new_est_conv if new_est_conv > 0 else 0
+        new_cpa = new_spend / new_est_conv if new_est_conv > 1e-9 else 0
         
         # Marginal Metrics
         delta_spend = new_spend - current_avg_spend
         delta_conv = new_est_conv - current_est_conv
-        marginal_cpa = delta_spend / delta_conv if delta_conv > 0 else 0
+        marginal_cpa = delta_spend / delta_conv if delta_conv > 1e-9 else 0
 
         # --- 5. VISUALIZATION ---
         
@@ -221,7 +212,7 @@ if uploaded_file is not None:
         with col1:
             st.metric("Current Avg CPA", format_currency(current_cpa))
         with col2:
-            st.metric("Projected CPA", format_currency(new_cpa), delta=f"{((new_cpa-current_cpa)/current_cpa)*100:.1f}%", delta_color="inverse")
+            st.metric("Projected CPA", format_currency(new_cpa), delta=f"{((new_cpa-current_cpa)/(current_cpa+1e-9))*100:.1f}%", delta_color="inverse")
         with col3:
             st.metric("Marginal CPA (Cost of New Conv)", format_currency(marginal_cpa))
 
