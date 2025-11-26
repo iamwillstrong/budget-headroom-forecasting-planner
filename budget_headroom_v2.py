@@ -264,31 +264,63 @@ if uploaded_file is not None:
 
         st.plotly_chart(fig, use_container_width=True)
 
-        # --- 6. REPORT & PDF DATA ---
+        # --- 6. REPORT & STATUS LOGIC ---
         
-        # UPDATED SATURATION PARAMETERS
+        # Determine Color Codes
+        # Using custom HEX to control the exact color of the 'chip' (delta)
         if marginal_cpa > (current_cpa * 2.0):
-            status_color = "🔴"
+            status_color_icon = "🔴"
             status_msg = "Diminishing Returns (High Saturation)"
+            delta_color_hex = "#ff2b2b" # Red
         elif marginal_cpa > (current_cpa * 1.5):
-            status_color = "🟡"
+            status_color_icon = "🟡"
             status_msg = "Moderate Headroom"
+            delta_color_hex = "#e6b800" # Dark Yellow/Gold (Readable on white)
         else:
-            status_color = "🟢"
+            status_color_icon = "🟢"
             status_msg = "High Headroom (Scalable)"
+            delta_color_hex = "#09ab3b" # Green
 
         st.subheader("Predictive Analysis")
         
+        # Using HTML/CSS columns to enforce specific colors on the metrics
         col1, col2, col3 = st.columns(3)
+        
+        # 1. Current CPA (Standard HTML styling)
         with col1:
-            st.metric("Current Avg CPA", format_currency(current_cpa))
+            st.markdown(f"""
+            <div style="padding: 10px;">
+                <p style="font-size: 14px; color: #555; margin-bottom: 2px;">Current Avg CPA</p>
+                <p style="font-size: 26px; font-weight: bold; margin: 0;">{format_currency(current_cpa)}</p>
+            </div>
+            """, unsafe_allow_html=True)
+            
+        # 2. Projected CPA (Custom HTML to match delta color to status)
         with col2:
-            st.metric("Projected CPA", format_currency(new_cpa), delta=f"{((new_cpa-current_cpa)/(current_cpa+1e-9))*100:.1f}%", delta_color="inverse")
+            delta_val = ((new_cpa - current_cpa) / (current_cpa + 1e-9)) * 100
+            st.markdown(f"""
+            <div style="padding: 10px; border-radius: 5px; background-color: rgba(240, 242, 246, 0.5);">
+                <p style="font-size: 14px; color: #555; margin-bottom: 2px;">Projected CPA</p>
+                <p style="font-size: 26px; font-weight: bold; margin: 0;">
+                    {format_currency(new_cpa)}
+                </p>
+                <p style="font-size: 14px; margin: 0; color: {delta_color_hex}; font-weight: 600;">
+                    ▲ {delta_val:.1f}%
+                </p>
+            </div>
+            """, unsafe_allow_html=True)
+
+        # 3. Marginal CPA (Standard HTML styling)
         with col3:
-            st.metric("Marginal CPA (Cost of New Conv)", format_currency(marginal_cpa))
+            st.markdown(f"""
+            <div style="padding: 10px;">
+                <p style="font-size: 14px; color: #555; margin-bottom: 2px;">Marginal CPA</p>
+                <p style="font-size: 26px; font-weight: bold; margin: 0;">{format_currency(marginal_cpa)}</p>
+            </div>
+            """, unsafe_allow_html=True)
 
         st.info(f"""
-        **Status: {status_color} {status_msg}**
+        **Status: {status_color_icon} {status_msg}**
         
         Current average spend for this selection is **{format_currency(current_avg_spend)}**, yielding ~**{int(current_est_conv)} conversions**.
         
