@@ -38,16 +38,15 @@ def create_pdf_report(fig, report_data):
 
     # 1. Save Plotly Figure as Image
     with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmpfile:
-        # High-res static image export
         try:
             fig.write_image(tmpfile.name, scale=2)
             pdf.image(tmpfile.name, x=10, y=30, w=190)
         except Exception as e:
-            pdf.cell(0, 10, "Error rendering chart image. Please ensure 'kaleido' is installed.", 0, 1)
+            pdf.cell(0, 10, "Error rendering chart image. Ensure 'kaleido' is installed.", 0, 1)
         
         tmp_path = tmpfile.name
 
-    # 2. Add Analysis Text (Positioned below image)
+    # 2. Add Analysis Text
     pdf.set_y(140) 
     
     # Section: Current State
@@ -79,7 +78,6 @@ def create_pdf_report(fig, report_data):
     pdf.multi_cell(0, 7, txt=f"Marginal CPA (Cost of extra results): {report_data['marg_cpa']}\n"
                              f"Status: {report_data['status']}")
 
-    # Cleanup temp file
     try:
         os.remove(tmp_path)
     except:
@@ -90,6 +88,9 @@ def create_pdf_report(fig, report_data):
 # --- APP LAYOUT ---
 
 st.title("Ad group projected headroom")
+st.markdown("""
+**Instructions:** Upload your CSV with the standard schema: `p_date`, `Ad Group Name`, `Cost (USD)`, `Conversions`.
+""")
 
 # 1. SIDEBAR: DATA INPUT & CONTROLS
 with st.sidebar:
@@ -115,12 +116,13 @@ if uploaded_file is not None:
         df = pd.read_csv(uploaded_file)
         
         # --- DATA MAPPING ---
+        # UPDATED: Now maps 'Ad Group Name' instead of ID
         col_map = {
             'p_date': 'Date',
             'Cost (USD)': 'Spend', 
             'Conversions': 'Conversions', 
             'CPM': 'CPM',
-            'Ad Group ID': 'Ad_Group_ID'
+            'Ad Group Name': 'Ad_Group_Name'
         }
         
         missing_cols = [key for key in col_map.keys() if key not in df.columns]
@@ -132,7 +134,8 @@ if uploaded_file is not None:
         df['Date'] = pd.to_datetime(df['Date'], format='%Y-%m-%d', errors='coerce')
         
         # --- FILTERING LOGIC ---
-        unique_ad_groups = sorted(df['Ad_Group_ID'].unique().astype(str))
+        # UPDATED: Uses Ad_Group_Name for sorting and display
+        unique_ad_groups = sorted(df['Ad_Group_Name'].unique().astype(str))
         options = ["All Data"] + unique_ad_groups
         
         selected_options = st.multiselect(
@@ -149,7 +152,8 @@ if uploaded_file is not None:
             filtered_df = df.copy()
             selection_label = "All Account Data"
         else:
-            filtered_df = df[df['Ad_Group_ID'].astype(str).isin(selected_options)]
+            # UPDATED: Filters by Name
+            filtered_df = df[df['Ad_Group_Name'].astype(str).isin(selected_options)]
             selection_label = f"Selection ({len(selected_options)} Ad Groups)"
 
         # --- AGGREGATION ---
@@ -209,7 +213,7 @@ if uploaded_file is not None:
         fig.add_trace(go.Scatter(
             x=x_range, y=y_range, 
             mode='lines', name='Saturation Curve',
-            showlegend=False, # HIDDEN PER REQUEST
+            showlegend=False,
             line=dict(color='#ff0050', width=3)
         ))
 
@@ -229,23 +233,23 @@ if uploaded_file is not None:
             marker=dict(color='#00f2ea', size=14, symbol='star')
         ))
 
-        # 5. DOTTED DROP LINES (Visual Aid)
-        # Line for Current Spend (Vertical to X axis)
+        # 5. DOTTED DROP LINES
+        # Line for Current Spend
         fig.add_shape(type="line",
             x0=current_avg_spend, y0=0, x1=current_avg_spend, y1=current_est_conv,
             line=dict(color="blue", width=1, dash="dot")
         )
-        # Line for Current Conversions (Horizontal to Y axis)
+        # Line for Current Conversions
         fig.add_shape(type="line",
             x0=0, y0=current_est_conv, x1=current_avg_spend, y1=current_est_conv,
             line=dict(color="blue", width=1, dash="dot")
         )
-        # Line for Projected Spend (Vertical to X axis)
+        # Line for Projected Spend
         fig.add_shape(type="line",
             x0=new_spend, y0=0, x1=new_spend, y1=new_est_conv,
             line=dict(color="#00f2ea", width=1, dash="dot")
         )
-        # Line for Projected Conversions (Horizontal to Y axis)
+        # Line for Projected Conversions
         fig.add_shape(type="line",
             x0=0, y0=new_est_conv, x1=new_spend, y1=new_est_conv,
             line=dict(color="#00f2ea", width=1, dash="dot")
@@ -257,7 +261,7 @@ if uploaded_file is not None:
             yaxis_title="Daily Conversions",
             template="plotly_white",
             height=500,
-            xaxis=dict(showspikes=False), # We are using manual lines instead
+            xaxis=dict(showspikes=False),
             yaxis=dict(showspikes=False)
         )
 
@@ -297,7 +301,6 @@ if uploaded_file is not None:
 
         # --- 7. PDF DOWNLOAD ---
         
-        # Prepare data dict for the PDF generator
         report_data = {
             "scope": selection_label,
             "curr_spend": format_currency(current_avg_spend),
@@ -312,7 +315,6 @@ if uploaded_file is not None:
             "status": status_msg
         }
 
-        # Generate PDF Button
         st.write("---")
         st.write("### Export Report")
         
