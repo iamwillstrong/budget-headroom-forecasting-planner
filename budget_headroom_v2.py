@@ -278,11 +278,11 @@ if uploaded_file is not None:
         # 2. Marginal > 1.5x Current = YELLOW
         # 3. Marginal <= 1.5x Current = GREEN (Scalable)
         
-        if marginal_cpa > (current_cpa * 2.0):
+        if marginal_cpa > (current_cpa * 2.5):
             status_color_icon = "🔴"
             status_msg = "Diminishing Returns (High Saturation)"
             delta_color_hex = "#ff2b2b" # Red
-        elif marginal_cpa > (current_cpa * 1.5):
+        elif marginal_cpa > (current_cpa * 1.75):
             status_color_icon = "🟡"
             status_msg = "Moderate Headroom"
             delta_color_hex = "#e6b800" # Dark Yellow
