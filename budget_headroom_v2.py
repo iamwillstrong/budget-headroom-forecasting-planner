@@ -8,7 +8,7 @@ import tempfile
 import os
 
 # --- CONFIGURATION ---
-st.set_page_config(page_title="Ad Group Projected Headroom", layout="wide")
+st.set_page_config(page_title="Smart+ projected headroom", layout="wide")
 
 # --- HELPER FUNCTIONS ---
 
@@ -29,7 +29,7 @@ def create_pdf_report(fig, report_data):
     class PDF(FPDF):
         def header(self):
             self.set_font('Arial', 'B', 15)
-            self.cell(0, 10, 'Ad Group Headroom Report', 0, 1, 'C')
+            self.cell(0, 10, 'Smart+ Headroom Report', 0, 1, 'C')
             self.ln(10)
 
     pdf = PDF()
@@ -39,12 +39,9 @@ def create_pdf_report(fig, report_data):
     # 1. Save Plotly Figure as Image
     with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmpfile:
         try:
-            # FIX: Explicitly define width/height to prevents cropping/scaling issues
-            # 1200x600 is a 2:1 ratio that fits A4 landscape perfectly
+            # Explicit width/height to prevent cropping/scaling issues in PDF
             fig.write_image(tmpfile.name, scale=2, width=1200, height=600)
-            
-            # FIX: Adjusted margins on the page (A4 width is ~210mm)
-            # x=10, w=190 leaves 10mm margins on both sides
+            # Margins
             pdf.image(tmpfile.name, x=10, y=30, w=190)
         except Exception as e:
             pdf.cell(0, 10, "Error rendering chart image. Ensure 'kaleido' is installed.", 0, 1)
@@ -52,7 +49,7 @@ def create_pdf_report(fig, report_data):
         tmp_path = tmpfile.name
 
     # 2. Add Analysis Text
-    pdf.set_y(130) # Moved up slightly to accommodate the image size
+    pdf.set_y(130) 
     
     # Section: Current State
     pdf.set_font("Arial", 'B', 12)
@@ -76,7 +73,8 @@ def create_pdf_report(fig, report_data):
 
     # Section: Marginal Efficiency
     pdf.set_font("Arial", 'B', 12)
-    # Dynamic color for PDF text based on status
+    
+    # Dynamic text color based on status
     if "High Saturation" in report_data['status']:
         pdf.set_text_color(255, 0, 0) # Red
     elif "Moderate" in report_data['status']:
@@ -99,9 +97,10 @@ def create_pdf_report(fig, report_data):
 
 # --- APP LAYOUT ---
 
-st.title("Ad Group Projected Headroom")
+st.title("Smart+ projected headroom")
 st.markdown("""
-**Instructions:** Upload your CSV with the standard schema: `p_date`, `Ad Group Name`, `Cost (USD)`, `Conversions`.
+**Instructions:** Upload your CSV with the required headers: 
+`p_date`, `Ad Group Name`, `Objective Type`, `Is Catalog Ads`, `Cost (USD)`, `CPM`, `Conversions`
 """)
 
 # 1. SIDEBAR: DATA INPUT & CONTROLS
@@ -128,12 +127,15 @@ if uploaded_file is not None:
         df = pd.read_csv(uploaded_file)
         
         # --- DATA MAPPING ---
+        # Updated to include new columns: Objective Type, Is Catalog Ads
         col_map = {
             'p_date': 'Date',
+            'Ad Group Name': 'Ad_Group_Name',
+            'Objective Type': 'Objective_Type',
+            'Is Catalog Ads': 'Is_Catalog_Ads',
             'Cost (USD)': 'Spend', 
-            'Conversions': 'Conversions', 
             'CPM': 'CPM',
-            'Ad Group Name': 'Ad_Group_Name'
+            'Conversions': 'Conversions'
         }
         
         missing_cols = [key for key in col_map.keys() if key not in df.columns]
@@ -145,25 +147,53 @@ if uploaded_file is not None:
         df['Date'] = pd.to_datetime(df['Date'], format='%Y-%m-%d', errors='coerce')
         
         # --- FILTERING LOGIC ---
+        
+        # 1. AD GROUP SELECTION
         unique_ad_groups = sorted(df['Ad_Group_Name'].unique().astype(str))
         options = ["All Data"] + unique_ad_groups
         
-        selected_options = st.multiselect(
+        selected_ad_groups = st.multiselect(
             "Select Ad Groups to Analyze",
             options=options,
             default="All Data"
         )
         
-        if not selected_options:
+        # 2. CATALOG TYPE SELECTION
+        # Options based on user requirement
+        catalog_options = ["All", "S+ non catalog", "S+ catalog"]
+        selected_catalog_type = st.selectbox(
+            "Select Catalog Type",
+            options=catalog_options
+        )
+        
+        if not selected_ad_groups:
             st.warning("Please select at least one Ad Group.")
             st.stop()
 
-        if "All Data" in selected_options:
-            filtered_df = df.copy()
-            selection_label = "All Account Data"
+        # Apply Ad Group Filter
+        if "All Data" in selected_ad_groups:
+            temp_df = df.copy()
+            selection_label = "All Data"
         else:
-            filtered_df = df[df['Ad_Group_Name'].astype(str).isin(selected_options)]
-            selection_label = f"Selection ({len(selected_options)} Ad Groups)"
+            temp_df = df[df['Ad_Group_Name'].astype(str).isin(selected_ad_groups)]
+            selection_label = f"Selection ({len(selected_ad_groups)} Ad Groups)"
+
+        # Apply Catalog Filter (Is_Catalog_Ads: Y/N)
+        # Assuming Data is Y/N based on prompt "filtered by Is Catalog Ads column (Y/N)"
+        # We normalize to handle potential inconsistencies (lowercase, whitespace)
+        if selected_catalog_type == "S+ catalog":
+            filtered_df = temp_df[temp_df['Is_Catalog_Ads'].astype(str).str.strip().str.upper() == 'Y']
+            selection_label += " | Catalog"
+        elif selected_catalog_type == "S+ non catalog":
+            filtered_df = temp_df[temp_df['Is_Catalog_Ads'].astype(str).str.strip().str.upper() == 'N']
+            selection_label += " | Non-Catalog"
+        else:
+            filtered_df = temp_df
+
+        # Check if data exists after filtering
+        if filtered_df.empty:
+            st.warning("No data matches the selected filters (Ad Group + Catalog Type).")
+            st.stop()
 
         # --- AGGREGATION ---
         daily_df = filtered_df.groupby('Date').agg({
@@ -261,14 +291,13 @@ if uploaded_file is not None:
         )
 
         fig.update_layout(
-            title=f"Ad Group Headroom: {selection_label}",
+            title=f"Smart+ Headroom: {selection_label}",
             xaxis_title="Daily Spend (USD)",
             yaxis_title="Daily Conversions",
             template="plotly_white",
             height=500,
             xaxis=dict(showspikes=False),
             yaxis=dict(showspikes=False),
-            # FIX: Added specific margins to prevent labels being cut off in the PDF export
             margin=dict(l=40, r=40, t=60, b=40)
         )
 
@@ -276,15 +305,12 @@ if uploaded_file is not None:
 
         # --- 6. REPORT & STATUS LOGIC ---
         
-        # Green (Scalable): Marginal CPA <= 1.75x Current CPA
-        # Yellow (Moderate): Marginal CPA > 1.75x AND <= 2.5x
-        # Red (High Saturation): Marginal CPA > 2.5x
-        
-        if marginal_cpa > (current_cpa * 2.5):
+        # UPDATED STATUS LOGIC PER REQUEST
+        if marginal_cpa > (current_cpa * 2.0):
             status_color_icon = "🔴"
             status_msg = "Diminishing Returns (High Saturation)"
             delta_color_hex = "#ff2b2b" # Red
-        elif marginal_cpa > (current_cpa * 1.75):
+        elif marginal_cpa > (current_cpa * 1.5):
             status_color_icon = "🟡"
             status_msg = "Moderate Headroom"
             delta_color_hex = "#e6b800" # Dark Yellow
@@ -366,7 +392,7 @@ if uploaded_file is not None:
                 st.download_button(
                     label="Download Report as PDF",
                     data=pdf_bytes,
-                    file_name="tiktok_headroom_report.pdf",
+                    file_name="smart_plus_headroom_report.pdf",
                     mime="application/pdf"
                 )
 
