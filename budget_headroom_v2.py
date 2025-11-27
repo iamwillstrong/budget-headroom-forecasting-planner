@@ -63,12 +63,12 @@ def create_pdf_report(fig, report_data):
 
     # Section: Projection
     pdf.set_font("Arial", 'B', 12)
-    pdf.cell(0, 10, "Projected Scenario", 0, 1)
+    pdf.cell(0, 10, "Estimated Scenario", 0, 1)
     pdf.set_font("Arial", size=11)
     pdf.multi_cell(0, 7, txt=f"Proposed Budget Increase: {report_data['pct_inc']}\n"
-                             f"New Daily Spend: {report_data['new_spend']}\n"
-                             f"Projected Conversions: {report_data['new_conv']} (+{report_data['delta_conv']})\n"
-                             f"Projected CPA: {report_data['new_cpa']}\n")
+                             f"Est. New Daily Spend: {report_data['new_spend']}\n"
+                             f"Est. Conversions: {report_data['new_conv']} (+{report_data['delta_conv']})\n"
+                             f"Est. CPA: {report_data['new_cpa']}\n")
     pdf.ln(5)
 
     # Section: Marginal Efficiency
@@ -85,8 +85,12 @@ def create_pdf_report(fig, report_data):
     pdf.cell(0, 10, "Marginal Efficiency Status", 0, 1)
     pdf.set_text_color(0, 0, 0) # Reset color
     pdf.set_font("Arial", size=11)
-    pdf.multi_cell(0, 7, txt=f"Marginal CPA (Cost of extra results): {report_data['marg_cpa']}\n"
+    pdf.multi_cell(0, 7, txt=f"Est. Marginal CPA (Cost of extra results): {report_data['marg_cpa']}\n"
                              f"Status: {report_data['status']}")
+    
+    pdf.ln(5)
+    pdf.set_font("Arial", 'I', 9)
+    pdf.multi_cell(0, 5, txt="DISCLAIMER: All values are estimates based on historical data regression. Actual performance may vary due to auction dynamics and creative fatigue. These forecasts are not guaranteed.")
 
     try:
         os.remove(tmp_path)
@@ -127,7 +131,6 @@ if uploaded_file is not None:
         df = pd.read_csv(uploaded_file)
         
         # --- DATA MAPPING ---
-        # Updated to include new columns: Objective Type, Is Catalog Ads
         col_map = {
             'p_date': 'Date',
             'Ad Group Name': 'Ad_Group_Name',
@@ -159,7 +162,6 @@ if uploaded_file is not None:
         )
         
         # 2. CATALOG TYPE SELECTION
-        # Options based on user requirement
         catalog_options = ["All", "S+ non catalog", "S+ catalog"]
         selected_catalog_type = st.selectbox(
             "Select Catalog Type",
@@ -178,9 +180,7 @@ if uploaded_file is not None:
             temp_df = df[df['Ad_Group_Name'].astype(str).isin(selected_ad_groups)]
             selection_label = f"Selection ({len(selected_ad_groups)} Ad Groups)"
 
-        # Apply Catalog Filter (Is_Catalog_Ads: Y/N)
-        # Assuming Data is Y/N based on prompt "filtered by Is Catalog Ads column (Y/N)"
-        # We normalize to handle potential inconsistencies (lowercase, whitespace)
+        # Apply Catalog Filter
         if selected_catalog_type == "S+ catalog":
             filtered_df = temp_df[temp_df['Is_Catalog_Ads'].astype(str).str.strip().str.upper() == 'Y']
             selection_label += " | Catalog"
@@ -218,9 +218,42 @@ if uploaded_file is not None:
             popt, pcov = curve_fit(saturate_hill, x_data, y_data, p0=p0, maxfev=10000)
             max_conv_model, k_model = popt
         except:
-            st.warning("Could not fit a perfect curve. Showing approximation.")
+            # Fallback (usually indicates linear data)
             max_conv_model = y_data.max() * 5
             k_model = x_data.max() * 5
+
+        # --- SAFETY CHECK: IS THE DATA SUFFICIENT? ---
+        # If the curve is effectively flat (linear), it means we haven't seen the saturation point.
+        # We test this by checking the marginal CPA at a theoretical 300% spend increase.
+        # If Marginal CPA at +300% is nearly identical to Current CPA, the model is guessing linear scale.
+        
+        test_spend_limit = x_data.mean() * 4.0 # 300% increase
+        test_conv_limit = saturate_hill(test_spend_limit, max_conv_model, k_model)
+        
+        curr_test_spend = x_data.mean()
+        curr_test_conv = saturate_hill(curr_test_spend, max_conv_model, k_model)
+        
+        # Calculate marginal CPA at the extreme limit
+        test_marginal_cpa = (test_spend_limit - curr_test_spend) / (test_conv_limit - curr_test_conv)
+        test_current_cpa = curr_test_spend / curr_test_conv if curr_test_conv > 0 else 0
+        
+        # If Marginal CPA at +300% spend is less than 1.1x current CPA, the curve is too flat.
+        if test_marginal_cpa < (test_current_cpa * 1.1):
+            st.error("⚠️ Insufficient Data for Rigorous Analysis")
+            st.markdown("""
+            **The provided data shows a linear relationship with no signs of diminishing returns.**
+            
+            This implies that the model cannot accurately predict a saturation point (headroom) because the ad groups have not yet been pushed hard enough to show efficiency drops. 
+            
+            **Action:** We cannot recommend a specific budget cap based on this file alone, as it would likely suggest unrealistic scaling (e.g., +300% with no CPA increase).
+            """)
+            
+            # Show the raw data graph anyway so they can see the linearity
+            fig = go.Figure()
+            fig.add_trace(go.Scatter(x=x_data, y=y_data, mode='markers', name='Daily Performance'))
+            fig.update_layout(title="Raw Data (Linear Trend Detected)", xaxis_title="Spend", yaxis_title="Conversions")
+            st.plotly_chart(fig)
+            st.stop()
 
         # --- 4. SCENARIOS ---
         current_avg_spend = x_data.mean()
@@ -268,7 +301,7 @@ if uploaded_file is not None:
         fig.add_trace(go.Scatter(
             x=[new_spend], y=[new_est_conv],
             mode='markers+text', name='Projected',
-            text=['Projected'], textposition="top left",
+            text=['Est. Future'], textposition="top left", # Changed text
             marker=dict(color='#00f2ea', size=14, symbol='star')
         ))
 
@@ -305,7 +338,7 @@ if uploaded_file is not None:
 
         # --- 6. REPORT & STATUS LOGIC ---
         
-        # UPDATED STATUS LOGIC PER REQUEST
+        # UPDATED STATUS LOGIC
         if marginal_cpa > (current_cpa * 2.0):
             status_color_icon = "🔴"
             status_msg = "Diminishing Returns (High Saturation)"
@@ -337,7 +370,7 @@ if uploaded_file is not None:
             delta_val = ((new_cpa - current_cpa) / (current_cpa + 1e-9)) * 100
             st.markdown(f"""
             <div style="padding: 10px; border-radius: 5px; background-color: rgba(240, 242, 246, 0.5);">
-                <p style="font-size: 14px; color: #555; margin-bottom: 2px;">Projected CPA</p>
+                <p style="font-size: 14px; color: #555; margin-bottom: 2px;">Est. New CPA</p>
                 <p style="font-size: 26px; font-weight: bold; margin: 0;">
                     {format_currency(new_cpa)}
                 </p>
@@ -351,19 +384,23 @@ if uploaded_file is not None:
         with col3:
             st.markdown(f"""
             <div style="padding: 10px;">
-                <p style="font-size: 14px; color: #555; margin-bottom: 2px;">Marginal CPA</p>
+                <p style="font-size: 14px; color: #555; margin-bottom: 2px;">Est. Marginal CPA</p>
                 <p style="font-size: 26px; font-weight: bold; margin: 0;">{format_currency(marginal_cpa)}</p>
             </div>
             """, unsafe_allow_html=True)
 
+        # UPDATED LANGUAGE & DISCLAIMER
         st.info(f"""
         **Status: {status_color_icon} {status_msg}**
         
         Current average spend for this selection is **{format_currency(current_avg_spend)}**, yielding ~**{int(current_est_conv)} conversions**.
         
-        By increasing budget by **{int(budget_increase_pct*100)}%** to **{format_currency(new_spend)}**:
-        * You can expect to generate **{int(delta_conv)} additional conversions**.
-        * These specific extra conversions will cost **{format_currency(marginal_cpa)}** each (Marginal CPA).
+        By increasing budget by **{int(budget_increase_pct*100)}%** to **{format_currency(new_spend)}**, the model estimates you **could** generate **{int(delta_conv)} additional conversions**.
+        
+        *Note: These specific extra conversions are estimated to cost **{format_currency(marginal_cpa)}** each (Marginal CPA).*
+        
+        ---
+        *Disclaimer: All forecasts are estimates based on historical data regression. Actual performance may vary due to auction dynamics and creative fatigue. Results are not guaranteed.*
         """)
 
         # --- 7. PDF DOWNLOAD ---
